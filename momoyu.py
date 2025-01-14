@@ -20,9 +20,17 @@ class Momoyu(Plugin):
         self.start_schedule()
 
     def did_receive_message(self, event: Event):
-        query = event.message.content.strip()
-        is_group = event.message.is_group
+        # 处理消息内容
+        content = event.message.content
+        if isinstance(content, dict):  # 如果内容是字典
+            query = content.get("text", "").strip()
+        elif isinstance(content, str):  # 如果内容是字符串
+            query = content.strip()
+        else:
+            logger.error("Unexpected message content type.")
+            return
 
+        is_group = event.message.is_group
         if is_group:
             query = re.sub(r'@[\w]+\s+', '', query, count=1).strip()
 
@@ -30,7 +38,7 @@ class Momoyu(Plugin):
         commands = self.config.get("command", [])
         if any(re.search(r'\b' + re.escape(cmd) + r'\b', query) for cmd in commands):
             if query in ["早报", "新闻", "来点新闻", "今天新闻"]:
-                self.get_daily_news(event, reply_mode="text")
+                self.get_daily_news(event)
                 event.bypass()            
         else:
             pass
@@ -51,7 +59,7 @@ class Momoyu(Plugin):
             schedule.run_pending()
             time.sleep(1)
 
-    def get_daily_news(self, event: Event, reply_mode="text"):
+    def get_daily_news(self, event: Event):
 
         momoyu_rss = self.config.get("momoyu_rss")
         xml_content = self.get_rss_content(momoyu_rss)
@@ -158,7 +166,7 @@ class Momoyu(Plugin):
                     processed_titles = await self.process_titles(titles, session)
                     result += f"\n\n==== {category} ====\n" + "\n".join(processed_titles)
             reply = Reply(ReplyType.TEXT, result)
-            event.channel.send(reply.content, event.message)
+            event.channel.send(reply, event.message)
 
     def daily_push(self):
         schedule_time = self.config.get("schedule_time")
