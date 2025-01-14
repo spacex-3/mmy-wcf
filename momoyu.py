@@ -1,0 +1,192 @@
+import requests
+from bs4 import BeautifulSoup
+import asyncio
+import aiohttp
+import schedule
+import threading
+import time
+import re
+from plugins import register, Plugin, Event, Reply, ReplyType, logger
+from utils.api import send_txt
+
+
+@register
+class Momoyu(Plugin):
+    name = "momoyu"
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.scheduler_thread = None
+        self.start_schedule()
+
+    def did_receive_message(self, event: Event):
+        query = event.message.content.strip()
+        is_group = event.message.is_group
+
+        if is_group:
+            query = re.sub(r'@[\w]+\s+', '', query, count=1).strip()
+
+
+        commands = self.config.get("command", [])
+        if any(re.search(r'\b' + re.escape(cmd) + r'\b', query) for cmd in commands):
+            if query in ["早报", "新闻", "来点新闻", "今天新闻"]:
+                self.get_daily_news(reply_mode="text")
+                event.bypass()            
+        else:
+            pass
+
+    def start_schedule(self):
+        if self.scheduler_thread is None:
+            schedule_time = self.config.get("schedule_time")
+            if schedule_time:
+                self.scheduler_thread = threading.Thread(target=self.run_schedule)
+                self.scheduler_thread.start()
+            else:
+                logger.info("定时推送已取消")
+
+    def run_schedule(self):
+        schedule_time = self.config.get("schedule_time", "09:00")
+        schedule.every().day.at(schedule_time).do(self.daily_push)
+        while True:
+            schedule.run_pending()
+            time.sleep(1)
+
+    def get_daily_news(self, reply_mode="text"):
+
+        momoyu_rss = self.config.get("momoyu_rss")
+        xml_content = self.get_rss_content({momoyu_rss})
+        if not xml_content:
+            error_info = "无法获取RSS内容，请稍后重试。"
+            return error_info
+
+        # 解析内容
+        categories = self.parse_xml_content(xml_content)
+        if not categories:
+            error_info = "解析RSS内容失败。"
+            return error_info
+
+        # 为每个标题添加emoji
+        asyncio.run(self.process_categories(categories, event))
+
+    def get_rss_content(self, url):
+        """获取RSS链接的实时内容"""
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            return response.text
+        except Exception as e:
+            logger.error(f"获取RSS内容时出错: {e}")
+            return None
+
+    def parse_xml_content(self, xml_content):
+        """解析XML内容并提取不同类别的热搜标题"""
+        enabled_categories = self.config.get("categories", {})
+        try:
+            soup = BeautifulSoup(xml_content, 'xml')
+            item = soup.find('item')
+            if not item or not item.find('description'):
+                logger.warning("未找到有效的item或description")
+                return None
+
+            description = item.find('description').text
+            content_soup = BeautifulSoup(description, 'html.parser')
+
+            results = {category: [] for category in {enabled_categories}}  # 动态生成类别字典
+            current_category = None
+
+            for element in content_soup.find_all(['h2', 'p']):
+                if element.name == 'h2':
+                    current_category = element.text.strip()
+                elif element.name == 'p' and current_category:
+                    link = element.find('a')
+                    if link and current_category in results and self.enabled_categories.get(current_category, False):
+                        # 添加标题到结果中
+                        title = re.sub(r'^\d+\.\s*', '', link.text.strip())
+                        results[current_category].append(title)
+            return results
+        except Exception as e:
+            logger.error(f"解析内容时出错: {e}")
+            return None
+
+    async def get_emoji_for_titles(self, titles, client_session):
+        """批量请求 OpenAI API，为多个标题生成表情符号"""
+        api_base = self.config.get("api_base")
+        api_key = self.config.get("api_key")
+        try:
+            async with client_session.post(
+                url=f"{api_base}/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [{
+                        "role": "system",
+                        "content": "你是一个emoji助手。请为以下的新闻标题分别选择一个最合适的emoji。每个标题用换行分隔，返回的结果按行分开，一行一个emoji。"
+                    }, {
+                        "role": "user",
+                        "content": "\n".join(titles)
+                    }],
+                    "max_tokens": 10 * len(titles)  # 为每个标题分配合理的 token 数
+                }
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    # 按行分隔返回的结果
+                    emojis = data['choices'][0]['message']['content'].strip().split("\n")
+                    return [f"{emoji.strip()} {title}" for emoji, title in zip(emojis, titles)]
+                return titles
+        except Exception as e:
+            logger.error(f"批量获取emoji时出错: {e}")
+            return titles
+
+    async def process_titles(self, titles, client_session):
+        """异步处理一组标题，使用批量请求"""
+        return await self.get_emoji_for_titles(titles, client_session)
+
+    async def process_categories(self, categories, event):
+        """为每个类别的标题添加emoji"""
+        async with aiohttp.ClientSession() as session:
+            result = ""
+            for category, titles in categories.items():
+                if titles:
+                    processed_titles = await self.process_titles(titles, session)
+                    result += f"\n\n==== {category} ====\n" + "\n".join(processed_titles)
+            reply = Reply(ReplyType.TEXT, {result})
+            event.channel.send(reply.content, event.message)
+
+    def daily_push(self):
+        schedule_time = self.config.get("schedule_time")
+        if not schedule_time:
+            logger.info("定时推送已取消")
+            return
+
+        single_chat_list = self.config.get("single_chat_list", [])
+        group_chat_list = self.config.get("group_chat_list", [])
+        reply_content = self.get_daily_news(reply_mode="text")
+        if reply_content is None:
+            logger.info("未获取到早报内容，本次定时推送跳过")
+            return
+
+        reply = Reply(ReplyType.TEXT, reply_content)
+        self.push_to_chat(reply, single_chat_list, group_chat_list)
+
+    def push_to_chat(self, reply, single_chat_list, group_chat_list):
+        for chat_id in single_chat_list + group_chat_list:
+            send_txt(reply.content, chat_id)
+
+    def will_decorate_reply(self, event: Event):
+        pass
+
+    def will_send_reply(self, event: Event):
+        pass
+
+    def will_generate_reply(self, event: Event):
+        pass
+
+    def help(self, **kwargs) -> str:
+        return "每日定时或手动发送摸摸鱼早报"
