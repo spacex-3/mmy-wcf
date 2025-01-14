@@ -30,7 +30,7 @@ class Momoyu(Plugin):
         commands = self.config.get("command", [])
         if any(re.search(r'\b' + re.escape(cmd) + r'\b', query) for cmd in commands):
             if query in ["早报", "新闻", "来点新闻", "今天新闻"]:
-                self.get_daily_news(reply_mode="text")
+                self.get_daily_news(event, reply_mode="text")
                 event.bypass()            
         else:
             pass
@@ -51,10 +51,10 @@ class Momoyu(Plugin):
             schedule.run_pending()
             time.sleep(1)
 
-    def get_daily_news(self, reply_mode="text"):
+    def get_daily_news(self, event: Event, reply_mode="text"):
 
         momoyu_rss = self.config.get("momoyu_rss")
-        xml_content = self.get_rss_content({momoyu_rss})
+        xml_content = self.get_rss_content(momoyu_rss)
         if not xml_content:
             error_info = "无法获取RSS内容，请稍后重试。"
             return error_info
@@ -94,7 +94,8 @@ class Momoyu(Plugin):
             description = item.find('description').text
             content_soup = BeautifulSoup(description, 'html.parser')
 
-            results = {category: [] for category in {enabled_categories}}  # 动态生成类别字典
+            results = {category: [] for category, enabled in enabled_categories.items() if enabled}
+
             current_category = None
 
             for element in content_soup.find_all(['h2', 'p']):
@@ -102,7 +103,7 @@ class Momoyu(Plugin):
                     current_category = element.text.strip()
                 elif element.name == 'p' and current_category:
                     link = element.find('a')
-                    if link and current_category in results and self.enabled_categories.get(current_category, False):
+                    if link and current_category in results:
                         # 添加标题到结果中
                         title = re.sub(r'^\d+\.\s*', '', link.text.strip())
                         results[current_category].append(title)
@@ -148,7 +149,7 @@ class Momoyu(Plugin):
         """异步处理一组标题，使用批量请求"""
         return await self.get_emoji_for_titles(titles, client_session)
 
-    async def process_categories(self, categories, event):
+    async def process_categories(self, categories, event: Event):
         """为每个类别的标题添加emoji"""
         async with aiohttp.ClientSession() as session:
             result = ""
@@ -156,7 +157,7 @@ class Momoyu(Plugin):
                 if titles:
                     processed_titles = await self.process_titles(titles, session)
                     result += f"\n\n==== {category} ====\n" + "\n".join(processed_titles)
-            reply = Reply(ReplyType.TEXT, {result})
+            reply = Reply(ReplyType.TEXT, result)
             event.channel.send(reply.content, event.message)
 
     def daily_push(self):
