@@ -176,12 +176,14 @@ class Momoyu(Plugin):
     async def process_categories(self, categories):
         """为每个类别的标题添加emoji"""
         async with aiohttp.ClientSession() as session:
-            result = ""
+            result_parts = []
             for category, titles in categories.items():
                 if titles:
                     processed_titles = await self.process_titles(titles, session)
-                    result += f"\n\n==== {category} ====\n" + "\n".join(processed_titles)
-            reply = Reply(ReplyType.TEXT, result)
+                    category_header = f"==== {category} ===="
+                    result_parts.append(f"{category_header}\n" + "\n".join(processed_titles))
+            result = "\n\n".join(result_parts)  # 确保中间类别有空行，但开头没有多余换行
+            reply = Reply(ReplyType.TEXT, result.strip())  # 去除开头和结尾的多余空白
             return reply
 
     def daily_push(self):
