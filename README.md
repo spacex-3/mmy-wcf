@@ -23,7 +23,9 @@
 plugins: 
 
   - name: momoyu
-    schedule_time: "09:30"
+    schedule_time:
+      - "09:30"
+      - "16:30"
     single_chat_list: [wxid_123]
     group_chat_list: [123@chatroom]
     command: [早报, 新闻, 来点新闻, 今天新闻]

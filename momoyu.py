@@ -47,16 +47,28 @@ class Momoyu(Plugin):
 
     def start_schedule(self):
         if self.scheduler_thread is None:
-            schedule_time = self.config.get("schedule_time")
-            if schedule_time:
+            schedule_times = self.config.get("schedule_time", [])
+            if schedule_times:
                 self.scheduler_thread = threading.Thread(target=self.run_schedule)
                 self.scheduler_thread.start()
             else:
                 logger.info("定时推送已取消")
 
     def run_schedule(self):
-        schedule_time = self.config.get("schedule_time", "09:00")
-        schedule.every().day.at(schedule_time).do(self.daily_push)
+        schedule_times = self.config.get("schedule_time", [])
+        if not isinstance(schedule_times, list):
+            logger.error("schedule_time 配置应为列表格式")
+            return
+        
+        # 遍历所有时间点，设置调度
+        for schedule_time in schedule_times:
+            try:
+                schedule.every().day.at(schedule_time).do(self.daily_push)
+                logger.info(f"定时任务已设置：{schedule_time}")
+            except Exception as e:
+                logger.error(f"设置定时任务失败：{schedule_time}, 错误: {e}")
+
+        # 启动调度循环
         while True:
             schedule.run_pending()
             time.sleep(1)
@@ -195,7 +207,7 @@ class Momoyu(Plugin):
 		# 遍历列表，发送消息
         for chat_id in single_chat_list + group_chat_list:
             channel.send_txt(reply_content, chat_id)
-            logger.info(f"消息已发送到用户 {chat_id}: {reply_content}")
+            logger.info(f"摸摸鱼已发送到用户 {chat_id}")
 
 
     def will_decorate_reply(self, event: Event):
@@ -208,4 +220,4 @@ class Momoyu(Plugin):
         pass
 
     def help(self, **kwargs) -> str:
-        return "每日定时或手动发送摸摸鱼早报"
+        return "每日定时或手动发送摸摸鱼"
