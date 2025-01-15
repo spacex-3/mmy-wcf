@@ -7,6 +7,8 @@ import threading
 import time
 import re
 from plugins import register, Plugin, Event, Reply, ReplyType, logger
+from channel.wrest import WrestChannel
+
 
 
 @register
@@ -47,14 +49,14 @@ class Momoyu(Plugin):
         if self.scheduler_thread is None:
             schedule_time = self.config.get("schedule_time")
             if schedule_time:
-                self.scheduler_thread = threading.Thread(target=self.run_schedule())
+                self.scheduler_thread = threading.Thread(target=self.run_schedule)
                 self.scheduler_thread.start()
             else:
                 logger.info("定时推送已取消")
 
     def run_schedule(self):
         schedule_time = self.config.get("schedule_time", "09:00")
-        schedule.every().day.at(schedule_time).do(self.daily_push())
+        schedule.every().day.at(schedule_time).do(self.daily_push)
         while True:
             schedule.run_pending()
             time.sleep(1)
@@ -185,18 +187,15 @@ class Momoyu(Plugin):
 
         # 确保 reply 是字符串
         reply_content = reply.content if isinstance(reply, Reply) else reply
-        self.push_to_chat(reply, single_chat_list, group_chat_list)
+        self.push_to_chat(reply_content, single_chat_list, group_chat_list)
 
-    def push_to_chat(self, reply, single_chat_list, group_chat_list):
-        # 遍历单聊列表，发送消息
-        for chat_id in single_chat_list:
-            self.send(reply, receiver_id=chat_id)
-            logger.info(f"消息已发送到用户 {chat_id}: {reply}")
+    def push_to_chat(self, reply_content, single_chat_list, group_chat_list):
+        channel = WrestChannel()
 
-        # 遍历群聊列表，发送消息
-        for chat_id in group_chat_list:
-            self.send(reply, room_id=chat_id)
-            logger.info(f"消息已发送到群 {chat_id}: {reply}")
+		# 遍历列表，发送消息
+        for chat_id in single_chat_list + group_chat_list:
+            channel.send_txt(reply_content, chat_id)
+            logger.info(f"消息已发送到用户 {chat_id}: {reply_content}")
 
 
     def will_decorate_reply(self, event: Event):
