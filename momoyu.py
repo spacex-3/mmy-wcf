@@ -38,7 +38,8 @@ class Momoyu(Plugin):
         commands = self.config.get("command", [])
         if any(re.search(r'\b' + re.escape(cmd) + r'\b', query) for cmd in commands):
             if query in ["早报", "新闻", "来点新闻", "今天新闻"]:
-                self.get_daily_news(event)
+                reply = self.get_daily_news()
+                event.channel.send(reply, event.message)
                 event.bypass()            
         else:
             pass
@@ -47,19 +48,19 @@ class Momoyu(Plugin):
         if self.scheduler_thread is None:
             schedule_time = self.config.get("schedule_time")
             if schedule_time:
-                self.scheduler_thread = threading.Thread(target=self.run_schedule)
+                self.scheduler_thread = threading.Thread(target=self.run_schedule())
                 self.scheduler_thread.start()
             else:
                 logger.info("定时推送已取消")
 
     def run_schedule(self):
         schedule_time = self.config.get("schedule_time", "09:00")
-        schedule.every().day.at(schedule_time).do(self.daily_push)
+        schedule.every().day.at(schedule_time).do(self.daily_push())
         while True:
             schedule.run_pending()
             time.sleep(1)
 
-    def get_daily_news(self, event: Event):
+    def get_daily_news(self):
 
         momoyu_rss = self.config.get("momoyu_rss")
         xml_content = self.get_rss_content(momoyu_rss)
@@ -74,7 +75,9 @@ class Momoyu(Plugin):
             return error_info
 
         # 为每个标题添加emoji
-        asyncio.run(self.process_categories(categories, event))
+        reply = asyncio.run(self.process_categories(categories))
+        return reply
+        
 
     def get_rss_content(self, url):
         """获取RSS链接的实时内容"""
@@ -157,7 +160,7 @@ class Momoyu(Plugin):
         """异步处理一组标题，使用批量请求"""
         return await self.get_emoji_for_titles(titles, client_session)
 
-    async def process_categories(self, categories, event: Event):
+    async def process_categories(self, categories):
         """为每个类别的标题添加emoji"""
         async with aiohttp.ClientSession() as session:
             result = ""
@@ -166,7 +169,7 @@ class Momoyu(Plugin):
                     processed_titles = await self.process_titles(titles, session)
                     result += f"\n\n==== {category} ====\n" + "\n".join(processed_titles)
             reply = Reply(ReplyType.TEXT, result)
-            event.channel.send(reply, event.message)
+            return reply
 
     def daily_push(self):
         schedule_time = self.config.get("schedule_time")
@@ -176,17 +179,18 @@ class Momoyu(Plugin):
 
         single_chat_list = self.config.get("single_chat_list", [])
         group_chat_list = self.config.get("group_chat_list", [])
-        reply_content = self.get_daily_news(reply_mode="text")
-        if reply_content is None:
+        reply = self.get_daily_news()
+        if reply is None:
             logger.info("未获取到早报内容，本次定时推送跳过")
             return
 
-        reply = Reply(ReplyType.TEXT, reply_content)
-        self.push_to_chat(reply, single_chat_list, group_chat_list)
+        # 确保 reply 是字符串
+        reply_content = reply.content if isinstance(reply, Reply) else reply
+        self.push_to_chat(reply_content, single_chat_list, group_chat_list)
 
-    def push_to_chat(self, reply, single_chat_list, group_chat_list):
+    def push_to_chat(self, reply_content, single_chat_list, group_chat_list):
         for chat_id in single_chat_list + group_chat_list:
-            send_txt(reply.content, chat_id)
+            send_txt(reply_content, chat_id)
 
     def will_decorate_reply(self, event: Event):
         pass

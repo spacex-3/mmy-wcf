@@ -3,4 +3,4 @@ beautifulsoup4
 openai
 aiohttp 
 lxml
-schedule
+schedule==1.2.0
